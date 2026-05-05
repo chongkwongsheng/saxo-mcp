@@ -1,0 +1,37 @@
+# --- secrets (NEVER commit) -------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+tokens.json
+.saxo-mcp/
+
+# --- python build artefacts -------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+*.so
+
+# --- python tooling caches --------------------------------------------------
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- editor / OS ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- repo-local junk --------------------------------------------------------
+preview/

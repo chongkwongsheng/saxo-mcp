@@ -1,0 +1,23 @@
+[project]
+name = "saxo-mcp"
+version = "0.1.0"
+description = "MCP server for Saxo Bank OpenAPI (SIM default, gated writes)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+saxo-mcp = "saxo_mcp.cli:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
