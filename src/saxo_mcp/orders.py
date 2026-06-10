@@ -226,10 +226,17 @@ def wait_for_fill(
     sleep_fn=time.sleep,
 ) -> FillResult:
     """Poll /port/v1/orders/me until order_id leaves the working list
-    (= filled or cancelled), then read the position's OpenPrice for the
-    fill. Caller chooses timeout; on timeout the order may STILL fill
+    (= filled OR cancelled/rejected), then read the position's OpenPrice for
+    the fill. Caller chooses timeout; on timeout the order may STILL fill
     later — squeeze-aimbot's heal sweeper covers that gap (the
-    regime-allocator 34-unbracketed-positions lesson)."""
+    regime-allocator 34-unbracketed-positions lesson).
+
+    H2: leaving the working list is ambiguous — it means filled OR
+    cancelled/rejected. filled=True is returned ONLY when a same-UIC position
+    is actually observed; if the order left the list but no matching position
+    is visible, filled=False (possibly cancelled/rejected). A position read
+    that ERRORS is distinct: filled stays True (fill_price unknown, not
+    absent), because the order is known to have left as a fill candidate."""
     client = client or get_client()
     start = time.monotonic()
     while True:
@@ -241,21 +248,40 @@ def wait_for_fill(
             working = client.get("/port/v1/orders/me").get("Data", [])
         except Exception:
             sleep_fn(poll_interval_s)
+            # H3: re-check the deadline AFTER sleeping so a persistently
+            # slow/erroring endpoint cannot overrun timeout_s by another poll.
+            if time.monotonic() - start > timeout_s:
+                return FillResult(
+                    filled=False, elapsed_s=time.monotonic() - start,
+                    detail=f"timeout after {timeout_s}s")
             continue
         if not any(str(w.get("OrderId")) == str(order_id) for w in working):
             break
         sleep_fn(poll_interval_s)
     fill_price: float | None = None
+    matched = False
+    read_errored = False
     detail = f"OrderId={order_id} left working list"
     try:
         for p in client.get("/port/v1/positions/me").get("Data", []):
             pb = p.get("PositionBase", {})
-            if pb.get("Uic") == uic and pb.get("OpenPrice"):
-                fill_price = float(pb["OpenPrice"])
-                break
+            if pb.get("Uic") == uic:
+                matched = True
+                if pb.get("OpenPrice") is not None:
+                    fill_price = float(pb["OpenPrice"])
+                    break
     except Exception:
+        read_errored = True
         fill_price = None
         detail += "; position read errored (fill_price unknown, not absent)"
+    # H2: a clean read showing NO same-UIC position means this order left the
+    # list without a fill (cancelled/rejected) — do NOT report filled=True.
+    if not matched and not read_errored:
+        return FillResult(
+            filled=False, fill_price=None,
+            elapsed_s=time.monotonic() - start,
+            detail=detail + "; order no longer working but no fill observed "
+                            "(possibly cancelled/rejected)")
     return FillResult(filled=True, fill_price=fill_price,
                       elapsed_s=time.monotonic() - start,
                       detail=detail)
