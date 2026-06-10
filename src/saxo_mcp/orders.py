@@ -305,11 +305,30 @@ def attach_bracket_oco(
     except Exception as e:  # noqa: BLE001
         return BracketResult(status="OCO_AMBIGUOUS", detail=f"transport: {e}")
     if 200 <= status < 300:
-        ids = [str(o.get("OrderId")) for o in resp.get("Orders", [])
-               if o.get("OrderId")]
-        if len(ids) == 2:
+        # C1 fix: bind TP/SL ids by ExternalReference, NOT array position.
+        # Saxo may echo the Orders array in any order; a positional bind
+        # (ids[0]=tp, ids[1]=sl) would silently swap the legs and later cancel
+        # the WRONG one. The legs carry "...-tp-..."/"...-sl-..." refs (see
+        # _leg's tag); fall back to request order only when refs are absent.
+        # Mirrors regime-allocator strategy/execute.py:3222-3236.
+        by_ref: dict[str, str] = {}
+        ids: list[str] = []
+        for o in resp.get("Orders", []):
+            oid = o.get("OrderId")
+            if not oid:
+                continue
+            oid = str(oid)
+            ids.append(oid)
+            ref = o.get("ExternalReference", "") or ""
+            if "-tp-" in ref:
+                by_ref["tp"] = oid
+            elif "-sl-" in ref:
+                by_ref["sl"] = oid
+        tp_id = by_ref.get("tp") or (ids[0] if ids else None)
+        sl_id = by_ref.get("sl") or (ids[1] if len(ids) > 1 else None)
+        if tp_id and sl_id:
             return BracketResult(status="PLACED_OCO",
-                                 tp_order_id=ids[0], sl_order_id=ids[1],
+                                 tp_order_id=tp_id, sl_order_id=sl_id,
                                  detail=f"HTTP {status}")
         return BracketResult(status="PLACED_OCO_NO_ID",
                              detail=f"HTTP {status}: ids missing in {resp}")
