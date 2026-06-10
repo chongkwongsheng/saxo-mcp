@@ -203,3 +203,29 @@ MIT — see [`LICENSE`](LICENSE).
 
 This project is **not affiliated with Saxo Bank**. "Saxo" is a trademark
 of Saxo Bank A/S; this is a third-party API client.
+
+## Programmatic orders (`saxo_mcp.orders`)
+
+Order primitives for strategy repos (squeeze-aimbot, regime-allocator):
+
+    from saxo_mcp import orders
+
+    key = orders.get_account_key()
+    uic = orders.resolve_stock_uic("GME")
+    ok, why = orders.precheck_ok(key, uic, "Buy", 82)
+    res = orders.place_market(key, uic, "Buy", 82)     # PlaceResult
+    fill = orders.wait_for_fill(res.order_id, uic)     # FillResult
+    br = orders.attach_bracket_oco(key, uic, 82,
+                                   tp_price=30.06, sl_price=22.13)
+
+Gating: `orders.writes_enabled()` (SAXO_WRITES_ENABLED=1 on SIM,
+"live-i-mean-it" on LIVE). No interactive 2FA in this module — the calling
+application owns the human gate. OCO statuses: PLACED_OCO /
+PLACED_OCO_NO_ID (on book — never re-place) / OCO_REJECTED /
+OCO_AMBIGUOUS (reconcile via working_orders() before any retry).
+
+Long-running processes: call `orders.auth_keepalive()` every ~10 min —
+Saxo SIM refresh tokens are ~1h rolling, and on-demand refresh loses the
+chain when idle. Multi-app isolation: set `SAXO_PROFILE=<name>` (own
+token cache `~/.saxo-mcp/tokens-<name>.json`) + per-repo `.env` app
+credentials, then `saxo-mcp login` once per profile.
