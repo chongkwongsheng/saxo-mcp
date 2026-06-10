@@ -83,6 +83,17 @@ def test_oco_5xx_ambiguous(fake_client):
     assert res.status == "OCO_AMBIGUOUS"       # reconcile before retrying
 
 
+def test_oco_self_gates_when_writes_disabled(monkeypatch, fake_client):
+    # H-2: defense-in-depth. With the write gate UNSET, attach_bracket_oco must
+    # fail CLOSED (OCO_REJECTED) WITHOUT ever calling the client (no POST sent).
+    monkeypatch.delenv("SAXO_WRITES_ENABLED", raising=False)
+    res = attach_bracket_oco("AbC==", 222, 82, tp_price=30.0, sl_price=22.0,
+                             client=fake_client)
+    assert res.status == "OCO_REJECTED"
+    assert "writes disabled" in res.detail
+    assert fake_client.calls == []          # never hit the wire
+
+
 def test_option_legs_carry_toclose(fake_client):
     fake_client.queue("POST", ORDERS,
                       {"Orders": [{"OrderId": "81"}, {"OrderId": "82"}]})

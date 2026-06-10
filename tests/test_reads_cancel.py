@@ -1,9 +1,20 @@
 # tests/test_reads_cancel.py
+import pytest
+
 from saxo_mcp.orders import cancel_order, positions, working_orders
 
 
 WORK = "/port/v1/orders/me"
 POS = "/port/v1/positions/me"
+
+
+@pytest.fixture(autouse=True)
+def _enable_writes(monkeypatch):
+    # cancel_order self-gates on SAXO_WRITES_ENABLED (FIX 2); the cancel tests
+    # exercise the wire path, so enable the SIM write gate. The dedicated
+    # gate-off test delenv()s it to override this.
+    monkeypatch.setenv("SAXO_ENV", "sim")
+    monkeypatch.setenv("SAXO_WRITES_ENABLED", "1")
 
 
 def test_cancel_order_true_on_2xx(fake_client):
@@ -15,6 +26,14 @@ def test_cancel_order_true_on_2xx(fake_client):
 def test_cancel_order_false_on_error(fake_client):
     fake_client.queue("DELETE", "/trade/v2/orders/71", (404, {"Message": "gone"}))
     assert cancel_order("71", "AbC==", client=fake_client) is False
+
+
+def test_cancel_order_self_gates_when_writes_disabled(monkeypatch, fake_client):
+    # H-2: with the write gate UNSET, cancel_order fails CLOSED (False) WITHOUT
+    # calling the client. False already means "reconcile" to callers.
+    monkeypatch.delenv("SAXO_WRITES_ENABLED", raising=False)
+    assert cancel_order("71", "AbC==", client=fake_client) is False
+    assert fake_client.calls == []          # never hit the wire
 
 
 def test_working_orders_filters_by_uic(fake_client):

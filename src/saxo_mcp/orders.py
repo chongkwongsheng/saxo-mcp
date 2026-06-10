@@ -5,8 +5,8 @@ Adapted from regime-allocator strategy/execute.py (resolver, fill-wait,
 native-OCO bracket) with its design-review fixes applied:
   - result types are declared dataclasses (asdict-safe; no dynamic attrs)
   - UIC cache is an explicit object, not a mutated module-private dict
-  - NO interactive 2FA here: gating = SAXO_WRITES_ENABLED + caller policy
-    (the caller's approval flow is the human gate)
+  - NO interactive 2FA here: gating = SAXO_WRITES_ENABLED + caller policy.
+    Primitives also self-gate (fail-closed); callers still own policy.
   - OCO placement is status-disciplined: 2xx=on book, 4xx=definitively
     rejected, 5xx/transport=AMBIGUOUS (caller must reconcile before retry)
 
@@ -16,6 +16,7 @@ request_raw — see SaxoClient) so callers can unit-test offline.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import dataclass
 
@@ -191,7 +192,13 @@ def place_market(
     """Place a market order. Status discipline:
     2xx -> PLACED; 4xx -> REJECTED (definitively not on book);
     5xx/transport -> ERROR (MAY be on book — caller must reconcile via
-    working_orders()/positions() before any retry)."""
+    working_orders()/positions() before any retry).
+
+    Self-gates on SAXO_WRITES_ENABLED (H-2 defense-in-depth): if writes are
+    disabled this returns REJECTED WITHOUT touching the client."""
+    if not writes_enabled():
+        return PlaceResult(status="REJECTED",
+                           detail="writes disabled (SAXO_WRITES_ENABLED unset)")
     client = client or get_client()
     body = _order_body(account_key, uic, side, qty,
                        asset_type=asset_type, manual_order=manual_order)
@@ -278,7 +285,14 @@ def attach_bracket_oco(
       OCO_REJECTED      4xx                  -> definitively NOT on book
       OCO_AMBIGUOUS     5xx/transport        -> unknown; caller MUST check
                                                working_orders() before retry
+
+    Self-gates on SAXO_WRITES_ENABLED (H-2 defense-in-depth): if writes are
+    disabled this returns OCO_REJECTED WITHOUT touching the client.
     """
+    if not writes_enabled():
+        return BracketResult(
+            status="OCO_REJECTED",
+            detail="writes disabled (SAXO_WRITES_ENABLED unset)")
     client = client or get_client()
 
     def _leg(order_type: str, price: float, tag: str) -> dict:
@@ -339,7 +353,16 @@ def attach_bracket_oco(
 
 def cancel_order(order_id: str, account_key: str, client=None) -> bool:
     """DELETE a working order. True on 2xx; False otherwise (already
-    filled/cancelled orders 404 — callers treat False as 'reconcile')."""
+    filled/cancelled orders 404 — callers treat False as 'reconcile').
+
+    Self-gates on SAXO_WRITES_ENABLED (H-2 defense-in-depth): if writes are
+    disabled this returns False (fail-closed; callers already treat False as
+    'not confirmed -> reconcile') WITHOUT touching the client. The reason is
+    surfaced via stderr since the bool contract carries no detail field."""
+    if not writes_enabled():
+        print("cancel_order: writes disabled (SAXO_WRITES_ENABLED unset); "
+              f"refusing to cancel OrderId={order_id}", file=sys.stderr)
+        return False
     client = client or get_client()
     try:
         status, _ = client.request_raw(
