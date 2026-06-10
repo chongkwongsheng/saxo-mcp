@@ -1,6 +1,6 @@
 """OAuth2 Code flow for Saxo OpenAPI with local redirect listener + token cache.
 
-Tokens are cached at ~/.saxo-mcp/tokens.json and auto-refreshed when near expiry.
+Tokens are cached at ~/.saxo-mcp/tokens.json (or tokens-<SAXO_PROFILE>.json per profile) and auto-refreshed when near expiry.
 Saxo refresh tokens on SIM are short-lived (roughly 1h, rolling) — if the server
 is idle past the refresh window, you must re-run `saxo-mcp login`.
 """
@@ -23,7 +23,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN_DIR = Path.home() / ".saxo-mcp"
-TOKEN_FILE = TOKEN_DIR / "tokens.json"
+TOKEN_FILE = TOKEN_DIR / "tokens.json"  # legacy alias; use _token_file() — this ignores SAXO_PROFILE
+
+
+def _token_file() -> Path:
+    """Token cache path, profile-aware. SAXO_PROFILE=<name> isolates token
+    chains per application (e.g. squeeze-aimbot on its own SIM account/user
+    vs regime-allocator on the default), so two apps never clobber each
+    other's refresh chain. Unset -> legacy tokens.json (back-compatible)."""
+    profile = os.getenv("SAXO_PROFILE", "").strip()
+    name = f"tokens-{profile}.json" if profile else "tokens.json"
+    return TOKEN_DIR / name
+
 
 _SIM_AUTH = "https://sim.logonvalidation.net"
 _LIVE_AUTH = "https://live.logonvalidation.net"
@@ -74,14 +85,14 @@ def _basic_auth_header() -> str:
 def _save_tokens(tokens: dict) -> None:
     TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     tokens["obtained_at"] = time.time()
-    TOKEN_FILE.write_text(json.dumps(tokens, indent=2))
+    _token_file().write_text(json.dumps(tokens, indent=2))
 
 
 def _load_tokens() -> dict | None:
-    if not TOKEN_FILE.exists():
+    if not _token_file().exists():
         return None
     try:
-        return json.loads(TOKEN_FILE.read_text())
+        return json.loads(_token_file().read_text())
     except json.JSONDecodeError:
         return None
 
@@ -180,7 +191,7 @@ def login() -> None:
         raise RuntimeError(f"Token exchange failed: {resp.status_code} {resp.text}")
 
     _save_tokens(resp.json())
-    print(f"Tokens saved to {TOKEN_FILE}")
+    print(f"Tokens saved to {_token_file()}")
 
 
 def _refresh(tokens: dict) -> dict:
@@ -236,10 +247,11 @@ def status() -> dict:
         "env": env(),
         "access_token_expires_in_seconds": remaining,
         "has_refresh_token": bool(tokens.get("refresh_token")),
-        "token_file": str(TOKEN_FILE),
+        "token_file": str(_token_file()),
     }
 
 
 def logout() -> None:
-    if TOKEN_FILE.exists():
-        TOKEN_FILE.unlink()
+    tf = _token_file()
+    if tf.exists():
+        tf.unlink()
