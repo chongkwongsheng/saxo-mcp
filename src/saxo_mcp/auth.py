@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -30,9 +31,17 @@ def _token_file() -> Path:
     """Token cache path, profile-aware. SAXO_PROFILE=<name> isolates token
     chains per application (e.g. squeeze-aimbot on its own SIM account/user
     vs regime-allocator on the default), so two apps never clobber each
-    other's refresh chain. Unset -> legacy tokens.json (back-compatible)."""
+    other's refresh chain. Unset -> legacy tokens.json (back-compatible).
+
+    H-1: the profile is interpolated straight into a filename, so it MUST be a
+    safe slug — reject anything outside [A-Za-z0-9_-]{1,64} to prevent a token
+    file escaping TOKEN_DIR (e.g. SAXO_PROFILE='../../etc/x' or 'a/b')."""
     profile = os.getenv("SAXO_PROFILE", "").strip()
+    if profile and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", profile):
+        raise RuntimeError("SAXO_PROFILE must match [A-Za-z0-9_-]{1,64}")
     name = f"tokens-{profile}.json" if profile else "tokens.json"
+    # Defense-in-depth: even a slug-clean name must resolve inside TOKEN_DIR.
+    assert (TOKEN_DIR / name).resolve().parent == TOKEN_DIR.resolve()
     return TOKEN_DIR / name
 
 
