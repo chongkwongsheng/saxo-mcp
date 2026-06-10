@@ -10,19 +10,10 @@ Gate layers:
 
 from __future__ import annotations
 
-import os
-
 from mcp.server.fastmcp import FastMCP
 
 from .client import get_client
-
-
-def _writes_enabled() -> bool:
-    env = os.getenv("SAXO_ENV", "sim").lower()
-    flag = os.getenv("SAXO_WRITES_ENABLED", "")
-    if env == "live":
-        return flag == "live-i-mean-it"
-    return flag == "1"
+from .orders import writes_enabled as _writes_enabled
 
 
 def register(mcp: FastMCP) -> None:
