@@ -236,7 +236,15 @@ def wait_for_fill(
     is actually observed; if the order left the list but no matching position
     is visible, filled=False (possibly cancelled/rejected). A position read
     that ERRORS is distinct: filled stays True (fill_price unknown, not
-    absent), because the order is known to have left as a fill candidate."""
+    absent), because the order is known to have left as a fill candidate.
+
+    H1 — FILL-PRICE ATTRIBUTION LIMIT: fill_price is the position-average
+    OpenPrice for this UIC. If the account already holds the same UIC
+    (re-entries, manual positions, netted/averaged positions), this is NOT
+    necessarily this order's marginal fill price. Callers MUST NOT trust
+    fill_price for averaged positions. When more than one same-UIC position is
+    present at read time, detail flags it. (A proper per-order correlation is a
+    tracked follow-up, not done here.)"""
     client = client or get_client()
     start = time.monotonic()
     while True:
@@ -261,19 +269,26 @@ def wait_for_fill(
     fill_price: float | None = None
     matched = False
     read_errored = False
+    same_uic_count = 0
     detail = f"OrderId={order_id} left working list"
     try:
-        for p in client.get("/port/v1/positions/me").get("Data", []):
+        rows = client.get("/port/v1/positions/me").get("Data", [])
+        for p in rows:
             pb = p.get("PositionBase", {})
             if pb.get("Uic") == uic:
+                same_uic_count += 1
                 matched = True
-                if pb.get("OpenPrice") is not None:
+                if fill_price is None and pb.get("OpenPrice") is not None:
                     fill_price = float(pb["OpenPrice"])
-                    break
     except Exception:
         read_errored = True
         fill_price = None
         detail += "; position read errored (fill_price unknown, not absent)"
+    # H1: more than one same-UIC position -> fill_price is an average, not this
+    # order's marginal fill. Flag it so callers don't trust the number.
+    if same_uic_count > 1:
+        detail += (f"; WARNING {same_uic_count} same-UIC positions present — "
+                   "fill_price is position-average, not this order's fill")
     # H2: a clean read showing NO same-UIC position means this order left the
     # list without a fill (cancelled/rejected) — do NOT report filled=True.
     if not matched and not read_errored:

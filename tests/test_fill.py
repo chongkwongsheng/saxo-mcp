@@ -66,6 +66,22 @@ def test_fill_with_errored_position_read_flags_detail(fake_client):
     assert "position read errored" in res.detail
 
 
+def test_multiple_same_uic_positions_flag_average_in_detail(fake_client):
+    # H1: when >1 same-UIC position is present, fill_price is a position
+    # average, not this order's marginal fill — detail must warn.
+    fake_client.queue("GET", WORK, {"Data": []})
+    fake_client.queue("GET", POS, {"Data": [
+        {"PositionBase": {"Uic": 222, "OpenPrice": 24.21}},
+        {"PositionBase": {"Uic": 222, "OpenPrice": 25.00}},
+    ]})
+    res = wait_for_fill("111", 222, timeout_s=1.0, poll_interval_s=0.01,
+                        client=fake_client)
+    assert res.filled is True
+    assert res.fill_price == 24.21          # first priced same-UIC row
+    assert "position-average" in res.detail
+    assert "2 same-UIC" in res.detail
+
+
 def test_exception_then_timeout_exits_promptly(monkeypatch, fake_client):
     # H3: re-check the monotonic deadline AFTER the exception-path sleep, so a
     # persistently erroring endpoint cannot overrun timeout_s by a full extra
