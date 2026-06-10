@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 import webbrowser
@@ -25,6 +26,11 @@ load_dotenv()
 
 TOKEN_DIR = Path.home() / ".saxo-mcp"
 TOKEN_FILE = TOKEN_DIR / "tokens.json"  # legacy alias; use _token_file() — this ignores SAXO_PROFILE
+
+# M-1: serialise the refresh+save critical section. A 10-min auth_keepalive
+# refresh and a 401-triggered refresh must not interleave and clobber the
+# rolling refresh token (each successful refresh ROLLS it).
+_REFRESH_LOCK = threading.Lock()
 
 
 def _token_file() -> Path:
@@ -92,9 +98,15 @@ def _basic_auth_header() -> str:
 
 
 def _save_tokens(tokens: dict) -> None:
-    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-    tokens["obtained_at"] = time.time()
-    _token_file().write_text(json.dumps(tokens, indent=2))
+    # M-4: do NOT mutate the caller's dict — persist a copy with obtained_at.
+    to_write = {**tokens, "obtained_at": time.time()}
+    # M-3: 0700 dir + 0600 file so the refresh token isn't world-readable
+    # (no-op on Windows, correct on POSIX).
+    TOKEN_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = _token_file()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(to_write, indent=2))
 
 
 def _load_tokens() -> dict | None:
@@ -204,30 +216,37 @@ def login() -> None:
 
 
 def _refresh(tokens: dict) -> dict:
-    refresh_token = tokens.get("refresh_token")
-    if not refresh_token:
-        raise RuntimeError("No refresh token cached — run `saxo-mcp login` again")
+    # M-1: hold _REFRESH_LOCK across the whole refresh+save so a keepalive
+    # refresh and a 401-triggered refresh can't interleave and clobber the
+    # rolling refresh token. Re-load the freshest token under the lock: if a
+    # concurrent thread already rolled it while we waited, use its result
+    # instead of replaying our (now-consumed) refresh token.
+    with _REFRESH_LOCK:
+        latest = _load_tokens() or tokens
+        refresh_token = latest.get("refresh_token")
+        if not refresh_token:
+            raise RuntimeError("No refresh token cached — run `saxo-mcp login` again")
 
-    resp = httpx.post(
-        f"{auth_base()}/token",
-        headers={
-            "Authorization": _basic_auth_header(),
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-        },
-        timeout=30,
-    )
-    if not resp.is_success:
-        raise RuntimeError(
-            f"Refresh failed ({resp.status_code}): {resp.text}\n"
-            f"Run `saxo-mcp login` to re-authenticate."
+        resp = httpx.post(
+            f"{auth_base()}/token",
+            headers={
+                "Authorization": _basic_auth_header(),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            timeout=30,
         )
-    new_tokens = resp.json()
-    _save_tokens(new_tokens)
-    return new_tokens
+        if not resp.is_success:
+            raise RuntimeError(
+                f"Refresh failed ({resp.status_code}): {resp.text}\n"
+                f"Run `saxo-mcp login` to re-authenticate."
+            )
+        new_tokens = resp.json()
+        _save_tokens(new_tokens)
+        return new_tokens
 
 
 def get_access_token() -> str:
