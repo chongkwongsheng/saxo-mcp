@@ -52,6 +52,36 @@ class SaxoClient:
         except ValueError:
             return {"raw": r.text}
 
+    def request_raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: Any | None = None,
+    ) -> tuple[int, dict]:
+        """Like _request but NEVER raises on HTTP error status — returns
+        (status_code, body_dict). Callers that need to branch on 2xx/4xx/5xx
+        (e.g. OCO placement status discipline) use this; everything else
+        keeps the raising convenience methods. Still does the one-shot
+        401 refresh retry."""
+        r = self._client.request(
+            method, path, headers=self._headers(), params=params, json=json
+        )
+        if r.status_code == 401:
+            tokens = auth._load_tokens()  # type: ignore[attr-defined]
+            if tokens:
+                auth._refresh(tokens)  # type: ignore[attr-defined]
+                r = self._client.request(
+                    method, path, headers=self._headers(), params=params, json=json
+                )
+        if not r.content:
+            return r.status_code, {}
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {"raw": r.text}
+
     def get(self, path: str, params: dict | None = None) -> dict:
         return self._request("GET", path, params=params)
 
