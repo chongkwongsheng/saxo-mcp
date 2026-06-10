@@ -15,6 +15,18 @@ import httpx
 from . import auth
 
 
+def _body_of(r: httpx.Response) -> dict:
+    """Decode a response body the same way request_raw does: empty -> {},
+    JSON when parseable, else {"raw": text}. Used for the H4 early-return on
+    refresh failure so the 401 body is shaped consistently."""
+    if not r.content:
+        return {}
+    try:
+        return r.json()
+    except ValueError:
+        return {"raw": r.text}
+
+
 class SaxoClient:
     def __init__(self, timeout: float = 30.0) -> None:
         self._client = httpx.Client(base_url=auth.api_base(), timeout=timeout)
@@ -69,9 +81,16 @@ class SaxoClient:
             method, path, headers=self._headers(), params=params, json=json
         )
         if r.status_code == 401:
+            # H4: request_raw must NEVER raise. auth._refresh can raise on a
+            # failed/expired refresh chain — swallow that and return the
+            # ORIGINAL 401 rather than propagating (callers map 4xx ->
+            # REJECTED). _request (the raising twin) keeps its own behaviour.
             tokens = auth._load_tokens()  # type: ignore[attr-defined]
             if tokens:
-                auth._refresh(tokens)  # type: ignore[attr-defined]
+                try:
+                    auth._refresh(tokens)  # type: ignore[attr-defined]
+                except Exception:
+                    return r.status_code, _body_of(r)
                 r = self._client.request(
                     method, path, headers=self._headers(), params=params, json=json
                 )

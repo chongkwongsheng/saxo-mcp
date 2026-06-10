@@ -32,3 +32,42 @@ def test_request_raw_empty_body_gives_empty_dict():
     status, body = client.request_raw("DELETE", "/trade/v2/orders/1")
     assert status == 204
     assert body == {}
+
+
+def test_request_raw_returns_401_when_refresh_raises(monkeypatch):
+    # H4: request_raw must NEVER raise. On a 401 it attempts a token refresh;
+    # if that refresh RAISES (expired/failed refresh chain), request_raw must
+    # honour its contract and RETURN the original (401, body), not propagate.
+    from saxo_mcp import auth
+
+    def handler(request):
+        return httpx.Response(401, json={"Message": "unauthorized"})
+
+    monkeypatch.setattr(auth, "_load_tokens", lambda: {"refresh_token": "x"})
+
+    def boom(_tokens):
+        raise RuntimeError("Refresh failed (400): expired. Run saxo-mcp login.")
+
+    monkeypatch.setattr(auth, "_refresh", boom)
+
+    client = _make_client(handler)
+    status, body = client.request_raw("POST", "/trade/v2/orders", json={})
+    assert status == 401
+    assert body == {"Message": "unauthorized"}
+
+
+def test_request_raw_returns_401_when_retry_still_401(monkeypatch):
+    # H4: if refresh SUCCEEDS but the retried request is still 401, return
+    # (401, body) — callers map 4xx -> REJECTED, which is acceptable.
+    from saxo_mcp import auth
+
+    def handler(request):
+        return httpx.Response(401, json={"Message": "still no"})
+
+    monkeypatch.setattr(auth, "_load_tokens", lambda: {"refresh_token": "x"})
+    monkeypatch.setattr(auth, "_refresh", lambda _t: {"access_token": "new"})
+
+    client = _make_client(handler)
+    status, body = client.request_raw("POST", "/trade/v2/orders", json={})
+    assert status == 401
+    assert body == {"Message": "still no"}
