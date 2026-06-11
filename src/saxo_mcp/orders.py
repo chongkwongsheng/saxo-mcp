@@ -127,7 +127,7 @@ def get_account_id(client=None) -> str | None:
         data = client.get("/port/v1/accounts/me")
         accounts = data.get("Data", [])
         aid = accounts[0].get("AccountId") if accounts else None
-        return str(aid) if aid else None
+        return str(aid) if aid is not None else None
     except Exception:
         return None
 

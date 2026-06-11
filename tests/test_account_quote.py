@@ -20,3 +20,16 @@ def test_get_account_id_none_on_error_status(fake_client):
 def test_get_account_id_none_on_empty_accounts(fake_client):
     fake_client.queue("GET", "/port/v1/accounts/me", {"Data": []})
     assert orders.get_account_id(client=fake_client) is None
+
+
+def test_get_account_id_zero_is_returned_not_dropped(fake_client):
+    # falsy-but-present AccountId must not be swallowed by a truthiness check
+    fake_client.queue("GET", "/port/v1/accounts/me",
+                      {"Data": [{"AccountId": 0}]})
+    assert orders.get_account_id(client=fake_client) == "0"
+
+
+def test_get_account_id_none_when_key_absent(fake_client):
+    fake_client.queue("GET", "/port/v1/accounts/me",
+                      {"Data": [{"AccountKey": "k-guid-1"}]})  # no AccountId
+    assert orders.get_account_id(client=fake_client) is None
