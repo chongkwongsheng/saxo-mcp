@@ -116,6 +116,22 @@ def get_account_key(client=None) -> str | None:
         return None
 
 
+def get_account_id(client=None) -> str | None:
+    """Human-readable account NUMBER (AccountId) of the first account on
+    /port/v1/accounts/me. Distinct from get_account_key (opaque GUID): the
+    AccountId is what the operator reads off the Saxo UI, so it is the value
+    used for last-4-digits arming challenges and trade-time identity checks.
+    None on any error or empty account list (fail-closed)."""
+    client = client or get_client()
+    try:
+        data = client.get("/port/v1/accounts/me")
+        accounts = data.get("Data", [])
+        aid = accounts[0].get("AccountId") if accounts else None
+        return str(aid) if aid else None
+    except Exception:
+        return None
+
+
 def _order_body(
     account_key: str,
     uic: int,
