@@ -71,6 +71,15 @@ class BracketResult:
     detail: str = ""
 
 
+@dataclass
+class Quote:
+    bid: float | None = None
+    ask: float | None = None
+    mid: float | None = None
+    delayed: bool = False
+    detail: str = ""
+
+
 def resolve_stock_uic(
     ticker: str,
     client=None,
@@ -128,6 +137,30 @@ def get_account_id(client=None) -> str | None:
         accounts = data.get("Data", [])
         aid = accounts[0].get("AccountId") if accounts else None
         return str(aid) if aid is not None else None
+    except Exception:
+        return None
+
+
+def get_quote(uic: int, asset_type: str = "Stock", client=None) -> Quote | None:
+    """Live (or delayed-flagged) prices via GET /trade/v1/infoprices.
+    None on transport/shape error (fail-closed for gating callers). A response
+    missing one side keeps the other side None — the CALLER decides which
+    sides it needs (aimbot's drift gate needs both and blocks otherwise)."""
+    client = client or get_client()
+    try:
+        data = client.get("/trade/v1/infoprices",
+                          params={"Uic": uic, "AssetType": asset_type})
+        q = data.get("Quote")
+        if not isinstance(q, dict):
+            return None
+
+        def _f(key: str) -> float | None:
+            v = q.get(key)
+            return float(v) if v is not None else None
+
+        return Quote(bid=_f("Bid"), ask=_f("Ask"), mid=_f("Mid"),
+                     delayed=float(q.get("DelayedByMinutes", 0) or 0) > 0,
+                     detail=f"DelayedByMinutes={q.get('DelayedByMinutes', 0)}")
     except Exception:
         return None
 
